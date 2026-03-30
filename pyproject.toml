@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "swebench-eval"
+version = "0.1.0"
+description = "Local SWE-bench Vetted evaluation tool"
+requires-python = ">=3.13"
+dependencies = [
+    "docker>=7",
+    "litellm[proxy]>=1.60",
+    "pydantic>=2",
+"typer>=0.15",
+    "httpx>=0.28",
+    "rich>=13",
+]
+
+[project.scripts]
+swebench-eval = "swebench_eval.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swebench_eval"]
