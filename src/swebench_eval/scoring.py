@@ -40,8 +40,20 @@ def parse_test_output(stdout: str) -> dict[str, str]:
 
 
 def check_expected(test_results: dict[str, str], expected: dict[str, str]) -> bool:
-    """Return True if all expected test outcomes match."""
-    return all(test_results.get(name) == status for name, status in expected.items())
+    """Return True if all expected test outcomes that were actually run match.
+
+    Tests present in *expected* but absent from *test_results* are skipped
+    because they were added by the gold patch (not the test patch) and won't
+    exist in the agent's scoring environment.
+    """
+    present = {
+        name: status
+        for name, status in expected.items()
+        if name in test_results
+    }
+    if not present:
+        return False
+    return all(test_results[name] == status for name, status in present.items())
 
 
 def build_combined_test_patch(added_tests: list[TestFile]) -> str:
