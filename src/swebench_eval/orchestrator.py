@@ -51,6 +51,7 @@ class EvaluationOrchestrator:
         max_concurrent: int = 4,
         timeout_seconds: int = 1800,
         force_rebuild: bool = False,
+        stagger_seconds: int = 0,
         on_event: Callable[[Event], None] | None = None,
     ) -> None:
         self.tasks = tasks
@@ -60,6 +61,7 @@ class EvaluationOrchestrator:
         self.max_concurrent = max_concurrent
         self.timeout_seconds = timeout_seconds
         self.force_rebuild = force_rebuild
+        self.stagger_seconds = stagger_seconds
         self.on_event = on_event
         self._image_tags: dict[str, str] = {}
 
@@ -96,7 +98,7 @@ class EvaluationOrchestrator:
             # Phase 3: Evaluate tasks in parallel
             logger.info("Phase 3: Evaluating %d tasks", len(runnable))
             evaluations = await asyncio.gather(
-                *(self._evaluate_one(task, sem) for task in runnable)
+                *(self._evaluate_one(task, sem, i) for i, task in enumerate(runnable))
             )
 
         # Phase 4: Aggregate results
@@ -120,7 +122,9 @@ class EvaluationOrchestrator:
             ))
             return result
 
-    async def _evaluate_one(self, task: Task, sem: asyncio.Semaphore) -> TaskEvaluation:
+    async def _evaluate_one(self, task: Task, sem: asyncio.Semaphore, index: int) -> TaskEvaluation:
+        if self.stagger_seconds > 0 and index > 0:
+            await asyncio.sleep(index * self.stagger_seconds)
         async with sem:
             def on_status(task_id: str, status: TaskStatus, data: dict[str, Any]) -> None:
                 self._emit(Event(type=EventType.task_status, task_id=task_id, data={"status": status, **data}))

@@ -71,6 +71,7 @@ def run(
     force_rebuild: Annotated[bool, typer.Option("--force-rebuild", help="Rebuild Docker images even if cached")] = False,
     no_live: Annotated[bool, typer.Option("--no-live", help="Disable live display, plain log output")] = False,
     filter_prefix: Annotated[Optional[str], typer.Option("--filter", help="Filter tasks by ID prefix")] = None,
+    stagger: Annotated[int, typer.Option("--stagger", help="Seconds between task starts")] = 0,
 ) -> None:
     """Run evaluation on tasks."""
     if api_key:
@@ -177,6 +178,7 @@ def run(
             max_concurrent=concurrent,
             timeout_seconds=timeout,
             force_rebuild=force_rebuild,
+            stagger_seconds=stagger,
             on_event=on_event,
         )
         return await orchestrator.run()
