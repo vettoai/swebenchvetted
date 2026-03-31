@@ -67,7 +67,7 @@ class TaskVerifier(BaseModel):
     model_config = _CAMEL_CONFIG
     added_tests: list[TestFile]
     deleted_tests: list[ExistingTestDeletion]
-    expected: dict[str, str]
+    ignored: list[str] = []
 
 
 class TaskEnvironment(BaseModel):

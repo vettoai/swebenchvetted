@@ -15,7 +15,7 @@ from swebench_eval.models import (
 )
 from swebench_eval.scoring import (
     build_combined_test_patch,
-    check_expected,
+    check_resolved,
     parse_agent_patch,
     parse_test_output,
 )
@@ -44,7 +44,10 @@ async def evaluate_task(
     """
     task_id = task.metadata.id
     attempts: list[EvaluationAttempt] = []
-    test_patch = build_combined_test_patch(task.verifier.added_tests)
+    test_patch = build_combined_test_patch(
+        task.verifier.added_tests,
+        deleted_tests=task.verifier.deleted_tests,
+    )
 
     def emit(status: TaskStatus, **extra: Any) -> None:
         if on_status:
@@ -132,7 +135,9 @@ async def evaluate_task(
 
         scoring_log = score_result.stdout[-_MAX_LOG_CHARS:]
         test_results = parse_test_output(score_result.stdout)
-        resolved = check_expected(test_results, task.verifier.expected)
+        resolved = check_resolved(
+            test_results, task.verifier.added_tests, task.verifier.ignored,
+        )
 
         if score_result.exit_code != 0:
             logger.warning(
