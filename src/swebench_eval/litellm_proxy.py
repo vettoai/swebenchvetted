@@ -30,10 +30,12 @@ class LiteLLMProxy:
         *,
         api_base: str | None = None,
         port: int = 10000,
+        num_workers: int = 4,
     ) -> None:
         self.model = model
         self.api_base = api_base
         self.port = port
+        self.num_workers = num_workers
         self._process: subprocess.Popen[bytes] | None = None
 
     async def __aenter__(self) -> LiteLLMProxy:
@@ -41,6 +43,7 @@ class LiteLLMProxy:
             "litellm",
             "--model", self.model,
             "--port", str(self.port),
+            "--num_workers", str(self.num_workers),
         ]
         if self.api_base:
             cmd.extend(["--api_base", self.api_base])

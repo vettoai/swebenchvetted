@@ -94,7 +94,7 @@ class EvaluationOrchestrator:
 
         # Phase 2: Start LiteLLM proxy
         logger.info("Phase 2: Starting LiteLLM proxy for model %s", self.model)
-        async with LiteLLMProxy(self.model, api_base=self.api_base):
+        async with LiteLLMProxy(self.model, api_base=self.api_base, num_workers=self.max_concurrent):
             # Phase 3: Evaluate tasks in parallel
             logger.info("Phase 3: Evaluating %d tasks", len(runnable))
             evaluations = await asyncio.gather(
