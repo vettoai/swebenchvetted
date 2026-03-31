@@ -6,8 +6,11 @@ import asyncio
 import logging
 import signal
 import subprocess
+import tempfile
+from pathlib import Path
 
 import httpx
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +34,50 @@ class LiteLLMProxy:
         api_base: str | None = None,
         port: int = 10000,
         num_workers: int = 4,
+        num_retries: int = 10,
+        retry_after: int = 5,
     ) -> None:
         self.model = model
         self.api_base = api_base
         self.port = port
         self.num_workers = num_workers
+        self.num_retries = num_retries
+        self.retry_after = retry_after
         self._process: subprocess.Popen[bytes] | None = None
+        self._config_dir: tempfile.TemporaryDirectory[str] | None = None
+
+    def _write_config(self) -> Path:
+        """Generate a LiteLLM YAML config with retry settings."""
+        litellm_params: dict[str, object] = {"model": self.model}
+        if self.api_base:
+            litellm_params["api_base"] = self.api_base
+
+        config = {
+            "model_list": [
+                {
+                    "model_name": "eval-model",
+                    "litellm_params": litellm_params,
+                }
+            ],
+            "litellm_settings": {
+                "num_retries": self.num_retries,
+                "retry_after": self.retry_after,
+            },
+        }
+
+        self._config_dir = tempfile.TemporaryDirectory(prefix="litellm-config-")
+        config_path = Path(self._config_dir.name) / "config.yaml"
+        config_path.write_text(yaml.dump(config, default_flow_style=False))
+        return config_path
 
     async def __aenter__(self) -> LiteLLMProxy:
+        config_path = self._write_config()
         cmd: list[str] = [
             "litellm",
-            "--model", self.model,
+            "--config", str(config_path),
             "--port", str(self.port),
             "--num_workers", str(self.num_workers),
         ]
-        if self.api_base:
-            cmd.extend(["--api_base", self.api_base])
 
         logger.info("Starting LiteLLM proxy: %s", " ".join(cmd))
         self._process = subprocess.Popen(
@@ -72,6 +103,9 @@ class LiteLLMProxy:
             self._process.kill()
             await asyncio.to_thread(self._process.wait)
         self._process = None
+        if self._config_dir:
+            self._config_dir.cleanup()
+            self._config_dir = None
 
     async def _wait_healthy(self) -> None:
         """Poll the health endpoint until it responds 200."""
