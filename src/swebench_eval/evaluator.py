@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from swebench_eval.docker_runner import run_container
+from swebench_eval.litellm_proxy import LiteLLMProxy
 from swebench_eval.models import (
     EvaluationAttempt,
     Task,
@@ -32,6 +33,7 @@ async def evaluate_task(
     n_attempts: int = 3,
     timeout_seconds: int = 1800,
     on_status: Callable[[str, TaskStatus, dict[str, Any]], None] | None = None,
+    proxy: LiteLLMProxy | None = None,
 ) -> TaskEvaluation:
     """Run a coding agent against *task* for *n_attempts* and score results.
 
@@ -54,6 +56,14 @@ async def evaluate_task(
             on_status(task_id, status, extra)
 
     for attempt_idx in range(n_attempts):
+        # Ensure the LLM proxy is alive before starting the attempt
+        if proxy is not None:
+            try:
+                await proxy.ensure_healthy()
+            except Exception:
+                logger.warning("Task %s attempt %d: proxy health check failed, will try anyway",
+                               task_id, attempt_idx + 1, exc_info=True)
+
         logger.info("Task %s attempt %d/%d: running agent", task_id, attempt_idx + 1, n_attempts)
         emit(TaskStatus.agent_running, attempt=attempt_idx + 1)
 

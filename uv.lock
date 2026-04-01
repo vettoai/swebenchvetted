@@ -1843,6 +1843,7 @@ dependencies = [
     { name = "httpx" },
     { name = "litellm", extra = ["proxy"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -1853,6 +1854,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "litellm", extras = ["proxy"], specifier = ">=1.60" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "rich", specifier = ">=13" },
     { name = "typer", specifier = ">=0.15" },
 ]

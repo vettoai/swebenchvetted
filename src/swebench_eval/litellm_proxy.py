@@ -25,6 +25,9 @@ class LiteLLMProxy:
 
     API keys are passed through from the environment (OPENAI_API_KEY,
     ANTHROPIC_API_KEY, GEMINI_API_KEY — LiteLLM reads these automatically).
+
+    The proxy auto-restarts if the process dies while the context manager is active.
+    Call :meth:`ensure_healthy` before each attempt to trigger a restart if needed.
     """
 
     def __init__(
@@ -45,6 +48,8 @@ class LiteLLMProxy:
         self.retry_after = retry_after
         self._process: subprocess.Popen[bytes] | None = None
         self._config_dir: tempfile.TemporaryDirectory[str] | None = None
+        self._config_path: Path | None = None
+        self._cmd: list[str] = []
 
     def _write_config(self) -> Path:
         """Generate a LiteLLM YAML config with retry settings."""
@@ -70,42 +75,86 @@ class LiteLLMProxy:
         config_path.write_text(yaml.dump(config, default_flow_style=False))
         return config_path
 
+    def _start_process(self) -> None:
+        """Start (or restart) the LiteLLM proxy subprocess."""
+        logger.info("Starting LiteLLM proxy: %s", " ".join(self._cmd))
+        self._process = subprocess.Popen(
+            self._cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+    def _stop_process(self) -> None:
+        """Stop the proxy process if running."""
+        if self._process is None:
+            return
+        try:
+            if self._process.poll() is None:
+                self._process.send_signal(signal.SIGTERM)
+                try:
+                    self._process.wait(timeout=_SHUTDOWN_GRACE)
+                except subprocess.TimeoutExpired:
+                    logger.warning("LiteLLM proxy did not exit gracefully, sending SIGKILL")
+                    self._process.kill()
+                    self._process.wait()
+        except OSError:
+            pass  # Process already dead
+        self._process = None
+
     async def __aenter__(self) -> LiteLLMProxy:
-        config_path = self._write_config()
-        cmd: list[str] = [
+        self._config_path = self._write_config()
+        self._cmd = [
             "litellm",
-            "--config", str(config_path),
+            "--config", str(self._config_path),
             "--port", str(self.port),
             "--num_workers", str(self.num_workers),
         ]
 
-        logger.info("Starting LiteLLM proxy: %s", " ".join(cmd))
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        self._start_process()
         await self._wait_healthy()
         # Discard stdout after healthy to avoid blocking on the pipe
-        self._process.stdout.close()  # type: ignore[union-attr]
+        if self._process and self._process.stdout:
+            self._process.stdout.close()
         logger.info("LiteLLM proxy is healthy on port %d", self.port)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        if self._process is None:
-            return
-        logger.info("Stopping LiteLLM proxy (pid=%d)", self._process.pid)
-        self._process.send_signal(signal.SIGTERM)
-        try:
-            await asyncio.to_thread(self._process.wait, timeout=_SHUTDOWN_GRACE)
-        except subprocess.TimeoutExpired:
-            logger.warning("LiteLLM proxy did not exit gracefully, sending SIGKILL")
-            self._process.kill()
-            await asyncio.to_thread(self._process.wait)
-        self._process = None
+        self._stop_process()
         if self._config_dir:
             self._config_dir.cleanup()
             self._config_dir = None
+
+    async def ensure_healthy(self) -> None:
+        """Check proxy liveness; restart if the process has died."""
+        if self._process is not None and self._process.poll() is None:
+            # Process is still running — do a quick health check
+            url = _HEALTH_URL.format(port=self.port)
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(url, timeout=5)
+                    if resp.status_code == 200:
+                        return
+            except httpx.HTTPError:
+                pass
+            # Health check failed but process is alive — give it a moment
+            logger.warning("LiteLLM proxy health check failed, waiting before retry")
+            await asyncio.sleep(5)
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(url, timeout=5)
+                    if resp.status_code == 200:
+                        return
+            except httpx.HTTPError:
+                pass
+
+        # Process is dead or unresponsive — restart
+        logger.warning("LiteLLM proxy is down, restarting")
+        self._stop_process()
+        self._start_process()
+        await self._wait_healthy()
+        if self._process and self._process.stdout:
+            self._process.stdout.close()
+        logger.info("LiteLLM proxy restarted and healthy on port %d", self.port)
 
     async def _wait_healthy(self) -> None:
         """Poll the health endpoint until it responds 200."""

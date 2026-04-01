@@ -64,6 +64,7 @@ class EvaluationOrchestrator:
         self.stagger_seconds = stagger_seconds
         self.on_event = on_event
         self._image_tags: dict[str, str] = {}
+        self._proxy: LiteLLMProxy | None = None
 
     def _emit(self, event: Event) -> None:
         if self.on_event:
@@ -94,12 +95,14 @@ class EvaluationOrchestrator:
 
         # Phase 2: Start LiteLLM proxy
         logger.info("Phase 2: Starting LiteLLM proxy for model %s", self.model)
-        async with LiteLLMProxy(self.model, api_base=self.api_base, num_workers=self.max_concurrent):
+        async with LiteLLMProxy(self.model, api_base=self.api_base, num_workers=self.max_concurrent) as proxy:
+            self._proxy = proxy
             # Phase 3: Evaluate tasks in parallel
             logger.info("Phase 3: Evaluating %d tasks", len(runnable))
             evaluations = await asyncio.gather(
                 *(self._evaluate_one(task, sem, i) for i, task in enumerate(runnable))
             )
+            self._proxy = None
 
         # Phase 4: Aggregate results
         logger.info("Phase 4: Aggregating results")
@@ -135,6 +138,7 @@ class EvaluationOrchestrator:
                 n_attempts=self.n_attempts,
                 timeout_seconds=self.timeout_seconds,
                 on_status=on_status,
+                proxy=self._proxy,
             )
             self._emit(Event(
                 type=EventType.task_done,
