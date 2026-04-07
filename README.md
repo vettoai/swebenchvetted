@@ -56,6 +56,7 @@ Builds Docker images, starts a LiteLLM proxy, runs the agent inside each task co
 | `--force-rebuild` | | `false` | Rebuild Docker images even if cached locally |
 | `--no-live` | | `false` | Disable live-updating display; use plain log output |
 | `--filter` | | | Only run tasks whose ID starts with this prefix |
+| `--stagger` | | `0` | Seconds to wait between launching each task (reduces LLM proxy contention) |
 
 **Input** can be:
 
@@ -91,11 +92,16 @@ Each evaluation run goes through four phases:
 
 1. **Build** — For each task, a Docker image is built from the task's Dockerfile and context files. Images are tagged `swebenchvetted-eval/<task_id>:latest` and cached locally.
 
-2. **LiteLLM proxy** — A LiteLLM proxy starts on `localhost:10000`, forwarding requests to the configured model provider. The agent inside the container talks to this proxy using `--network host`.
+2. **LiteLLM proxy** — A LiteLLM proxy starts on `localhost:10000`, forwarding requests to the configured model provider. The proxy is configured with:
+   - **Multiple workers** (`--num_workers`) matching the `--concurrent` setting
+   - **Rate limit retries** (10 retries with 5s backoff) to handle provider throttling
+   - **Auto-restart** — if the proxy process dies mid-run, it is automatically restarted before the next attempt
 
-3. **Evaluate** — For each task, up to `n` attempts are run:
+   The agent inside the container talks to this proxy using `--network host`.
+
+3. **Evaluate** — For each task, up to `n` attempts are run. When `--stagger` is set, task launches are spaced apart to reduce initial contention on the LLM proxy.
    - **Agent run**: Executes `/testbed/evaluate.sh` inside the task container with the problem statement mounted. The agent (deepagents) produces a patch.
-   - **Scoring run**: Applies the agent's patch plus the test patch, runs `/testbed/verify_solution`, and checks whether all expected tests pass.
+   - **Scoring run**: Applies the agent's patch plus the test patch, runs `/testbed/verify_solution`, and checks results. Generated tests must pass, and no existing (non-ignored) tests may regress.
 
 4. **Aggregate** — Results are collected and pass@1, pass@3, and resolved rate are computed using the unbiased estimator from the Codex paper (Chen et al., 2021).
 
@@ -170,9 +176,9 @@ Each task follows this schema (camelCase):
       }
     ],
     "deletedTests": [],
-    "expected": {
-      "tests/test_example.py::test_something": "PASSED"
-    }
+    "ignored": [
+      "tests/test_example.py::test_known_flaky"
+    ]
   },
   "environment": {
     "imageName": "...",
@@ -185,6 +191,17 @@ Each task follows this schema (camelCase):
 }
 ```
 
+## Reliability features
+
+Several mechanisms improve evaluation reliability across different models and providers:
+
+- **Staggered starts** (`--stagger`): Spaces out task launches to avoid overwhelming the LLM proxy when many tasks start simultaneously.
+- **LiteLLM multi-worker proxy**: The proxy spawns one uvicorn worker per concurrent task, preventing a single-worker bottleneck.
+- **Rate limit retries**: The LiteLLM proxy retries rate-limited requests (HTTP 429) up to 10 times with exponential backoff before propagating the error.
+- **Proxy auto-restart**: Before each attempt, the evaluator checks proxy liveness. If the proxy process has died, it is automatically restarted.
+- **Early abort on proxy failure**: If the container's health check cannot reach the proxy within 120 seconds, the attempt exits immediately instead of wasting the full timeout.
+- **Robust patch capture**: The `evaluate.sh` script saves the original `HEAD` before the agent runs and diffs against it afterward using `git add -A && git diff $ORIG_HEAD`. This captures all changes including new files and changes the agent may have committed via `git commit`.
+
 ## Examples
 
 Run a single task with Gemini, 1 attempt:
@@ -193,10 +210,10 @@ Run a single task with Gemini, 1 attempt:
 uv run swebench-eval run task.json -m gemini/gemini-3.1-pro-preview -n 1
 ```
 
-Run all tasks in a directory with OpenAI, 8 parallel workers:
+Run all tasks in a directory with OpenAI, 8 parallel workers, staggered 10s apart:
 
 ```bash
-uv run swebench-eval run tasks/ -m openai/gpt-4o -j 8 -n 3
+uv run swebench-eval run tasks/ -m openai/gpt-4o -j 8 -n 3 --stagger 10
 ```
 
 Run only Django tasks:
